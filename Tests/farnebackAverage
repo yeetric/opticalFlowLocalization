@@ -1,0 +1,91 @@
+import cv2
+import numpy as np
+from scipy import stats
+
+cap = cv2.VideoCapture('shapeslit.mp4')
+
+fps = cap.get(cv2.CAP_PROP_FPS)
+refreshrate = 0.5 # seconds
+
+fx_stack = []
+fy_stack = []
+
+ret, old_frame = cap.read()
+
+# first frame grayscale
+old_gray = cv2.cvtColor(old_frame, cv2.COLOR_BGR2GRAY)
+
+# for video writing
+fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
+out = cv2.VideoWriter('output.mp4', fourcc, fps, (old_frame.shape[1], old_frame.shape[0]))
+
+# Parameters for motion vectors
+step_size = 16
+scale = 10
+
+# Farneback optical flow params
+parameters = {
+    'pyr_scale': 0.3,
+    'levels': 3,
+    'winsize': 100, # "more robust (for fast bois) but blurred motion field"
+    'iterations': 5,
+    'poly_n': 20,
+    'poly_sigma': 1.5
+}
+
+# Threshold for filtering out unreliable results
+magnitude_threshold = 2.0
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) # grayscale
+
+    flow = cv2.calcOpticalFlowFarneback(old_gray, frame_gray, None, **parameters, flags=0)
+
+    for y in range(0, flow.shape[0], step_size):
+        for x in range(0, flow.shape[1], step_size):
+            fx, fy = flow[y, x]
+            magnitude = np.hypot(fx, fy)
+            direction = np.arctan2(fy, fx) * (180 / np.pi)  # deg
+
+            if (magnitude > magnitude_threshold and magnitude < 10):
+                cv2.line(frame, (x, y), (int(x + fx * scale), int(y + fy * scale)), (0, 255, 0), 1)
+                cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)
+                # If stack size exceeds frames in refreshrate, pop the oldest values
+                if len(fx_stack) > int(fps*refreshrate):
+                    fx_stack.pop(0)
+                    fy_stack.pop(0)
+                fx_stack.append(fx)
+                fy_stack.append(fy)
+                
+    # Calculate the average of the x and y components of the optical flow
+    fx_avg = np.mean(fx_stack)
+    fy_avg = np.mean(fy_stack)
+
+    # check avg flow componenets are not NaN
+    if not np.isnan(fx_avg) and not np.isnan(fy_avg):
+        # Get magnitude and direction of the average flow
+        magnitude_avg = np.hypot(fx_avg, fy_avg)
+        direction_avg = np.arctan2(fy_avg, fx_avg) * (180 / np.pi)  # Convert to degrees
+
+        # draw average flow
+        cv2.arrowedLine(frame, (int(flow.shape[1]/2), int(flow.shape[0]/2)), (int(flow.shape[1]/2 + fx_avg * scale * 3), int(flow.shape[0]/2 + fy_avg * scale*3)), thickness= 5, color = (255, 0, 0))
+        cv2.circle(frame, (int(flow.shape[1]/2), int(flow.shape[0]/2)), 1, (255, 0, 0), -1)
+        cv2.putText(frame, "Avg Magnitude: " + str(magnitude_avg), (0, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0))
+        cv2.putText(frame, "Avg Direction: " + str(direction_avg), (0, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0))
+
+    
+    # write to file 
+    out.write(frame)
+    cv2.imshow('weee', frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+    old_gray = frame_gray.copy()
+
+out.release() 
+cap.release()
+cv2.destroyAllWindows()
